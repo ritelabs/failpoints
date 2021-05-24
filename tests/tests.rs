@@ -1,4 +1,5 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
+// Copyright 2021 RiteLabs. Licensed under Apache-2.0 OR MIT.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::*;

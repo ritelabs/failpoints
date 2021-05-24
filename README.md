@@ -1,4 +1,4 @@
-# failpoints, another fail-rsS
+# failpoints, another fail-rs
 
 [![CI](https://github.com/ritelabs/failpoints/workflows/CI/badge.svg)](https://github.com/ritelabs/failpoints/actions)
 [![Crates.io](https://img.shields.io/crates/v/failpoints.svg?maxAge=2592000)](https://crates.io/crates/failpoints)
@@ -7,7 +7,7 @@
 
 A failpoints implementation for Rust.
 
-Fail points are code instrumentations that allow errors and other behavior to be injected dynamically at runtime, primarily for testing purposes. Fail points are flexible and can be configured to exhibit a variety of behavior, including panics, early returns, and sleeping. They can be controlled both programmatically and via the environment, and can be triggered conditionally and probabilistically.
+Failpoints are code instrumentations that allow errors and other behavior to be injected dynamically at runtime, primarily for testing purposes. Fail points are flexible and can be configured to exhibit a variety of behavior, including panics, early returns, and sleeping. They can be controlled both programmatically and via the environment, and can be triggered conditionally and probabilistically.
 
 This crate is inspired by FreeBSD's [failpoints](https://freebsd.org/cgi/man.cgi?query=fail).
 

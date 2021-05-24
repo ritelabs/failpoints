@@ -2,7 +2,7 @@
 name = "failpoints"
 version = "0.1.0"
 authors = ["RiteLabs"]
-license = "Apache-2.0"
+license = "Apache-2.0 OR MIT"
 keywords = ["failpoints", "fail"]
 repository = "https://github.com/ritelabs/failpoints"
 readme = "README.md"
