@@ -1,4 +1,5 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
+// Copyright 2021 RiteLabs. Licensed under Apache-2.0 OR MIT.
 
 //! A fail point implementation for Rust.
 //!
@@ -18,20 +19,20 @@
 //!
 //! ```toml
 //! [dependencies]
-//! fail = "0.4"
+//! failpoints = "0.1"
 //! ```
 //!
-//! Now you can import the `fail_point!` macro from the `fail` crate and use it
+//! Now you can import the `failpoint!` macro from the `fail` crate and use it
 //! to inject dynamic failures.
 //!
 //! As an example, here's a simple program that uses a fail point to simulate an
 //! I/O panic:
 //!
 //! ```rust
-//! use fail::{fail_point, FailScenario};
+//! use failpoints::{failpoint, FailScenario};
 //!
 //! fn do_fallible_work() {
-//!     fail_point!("read-dir");
+//!     failpoint!("read-dir");
 //!     let _dir: Vec<_> = std::fs::read_dir(".").unwrap().collect();
 //!     // ... do some work on the directory ...
 //! }
@@ -82,10 +83,10 @@
 //! Here's a basic pattern for writing unit tests tests with fail points:
 //!
 //! ```rust
-//! use fail::{fail_point, FailScenario};
+//! use failpoints::{failpoint, FailScenario};
 //!
 //! fn do_fallible_work() {
-//!     fail_point!("read-dir");
+//!     failpoint!("read-dir");
 //!     let _dir: Vec<_> = std::fs::read_dir(".").unwrap().collect();
 //!     // ... do some work on the directory ...
 //! }
@@ -94,7 +95,7 @@
 //! #[should_panic]
 //! fn test_fallible_work() {
 //!     let scenario = FailScenario::setup();
-//!     fail::cfg("read-dir", "panic").unwrap();
+//!     failpoints::cfg("read-dir", "panic").unwrap();
 //!
 //!     do_fallible_work();
 //!
@@ -127,15 +128,15 @@
 //! configurable value.
 //!
 //! The setup for early return requires a slightly diferent invocation of the
-//! `fail_point!` macro. To illustrate this, let's modify the `do_fallible_work`
+//! `failpoint!` macro. To illustrate this, let's modify the `do_fallible_work`
 //! function we used earlier to return a `Result`:
 //!
 //! ```rust
-//! use fail::{fail_point, FailScenario};
+//! use failpoints::{failpoint, FailScenario};
 //! use std::io;
 //!
 //! fn do_fallible_work() -> io::Result<()> {
-//!     fail_point!("read-dir");
+//!     failpoint!("read-dir");
 //!     let _dir: Vec<_> = std::fs::read_dir(".")?.collect();
 //!     // ... do some work on the directory ...
 //!     Ok(())
@@ -169,7 +170,7 @@
 //! This error tells us that the "read-dir" fail point is not defined correctly
 //! to support early return, and gives us the line number of that fail point.
 //! What we're missing in the fail point definition is code describring _how_ to
-//! return an error value, and the way we do this is by passing `fail_point!` a
+//! return an error value, and the way we do this is by passing `failpoint!` a
 //! closure that returns the same type as the enclosing function.
 //!
 //! Here's a variation that does so:
@@ -177,7 +178,7 @@
 //! ```rust
 //! # use std::io;
 //! fn do_fallible_work() -> io::Result<()> {
-//!     fail::fail_point!("read-dir", |_| {
+//!     failpoints::failpoint!("read-dir", |_| {
 //!         Err(io::Error::new(io::ErrorKind::PermissionDenied, "error"))
 //!     });
 //!     let _dir: Vec<_> = std::fs::read_dir(".")?.collect();
@@ -202,12 +203,12 @@
 //!
 //! ## Advanced usage
 //!
-//! That's the basics of fail points: defining them with `fail_point!`,
-//! configuring them with `FAILPOINTS` and `fail::cfg`, and configuring them to
+//! That's the basics of fail points: defining them with `failpoint!`,
+//! configuring them with `FAILPOINTS` and `failpoints::cfg`, and configuring them to
 //! panic and return early. But that's not all they can do. To learn more see
 //! the documentation for [`cfg`](fn.cfg.html),
 //! [`cfg_callback`](fn.cfg_callback.html) and
-//! [`fail_point!`](macro.fail_point.html).
+//! [`failpoint!`](macro.failpoint.html).
 //!
 //!
 //! ## Usage considerations
@@ -230,9 +231,11 @@ use std::env::VarError;
 use std::fmt::Debug;
 use std::str::FromStr;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Condvar, Mutex, MutexGuard, RwLock, TryLockError};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 use std::{env, thread};
+
+use parking_lot::{Condvar, Mutex, MutexGuard, RwLock};
 
 #[derive(Clone)]
 struct SyncCallback(Arc<dyn Fn() + Send + Sync>);
@@ -452,15 +455,14 @@ impl FailPoint {
         loop {
             // TODO: maybe busy waiting here.
             match self.actions.try_write() {
-                Err(TryLockError::WouldBlock) => {}
-                Ok(mut guard) => {
+                None => {}
+                Some(mut guard) => {
                     *guard = actions;
-                    *self.actions_str.write().unwrap() = actions_str.to_string();
+                    *self.actions_str.write() = actions_str.to_string();
                     return;
                 }
-                Err(e) => panic!("unexpected poison: {:?}", e),
             }
-            let mut guard = self.pause.lock().unwrap();
+            let mut guard = self.pause.lock();
             *guard = false;
             self.pause_notifier.notify_all();
         }
@@ -469,13 +471,13 @@ impl FailPoint {
     #[cfg_attr(feature = "cargo-clippy", allow(clippy::option_option))]
     fn eval(&self, name: &str) -> Option<Option<String>> {
         let task = {
-            let actions = self.actions.read().unwrap();
+            let actions = self.actions.read();
             match actions.iter().filter_map(Action::get_task).next() {
                 Some(Task::Pause) => {
-                    let mut guard = self.pause.lock().unwrap();
+                    let mut guard = self.pause.lock();
                     *guard = true;
                     loop {
-                        guard = self.pause_notifier.wait(guard).unwrap();
+                        self.pause_notifier.wait(&mut guard);
                         if !*guard {
                             break;
                         }
@@ -543,7 +545,7 @@ impl<'a> FailScenario<'a> {
     /// The format of `FAILPOINTS` is `failpoint=actions;...`, where
     /// `failpoint` is the name of the fail point. For more information
     /// about fail point actions see the [`cfg`](fn.cfg.html) function and
-    /// the [`fail_point`](macro.fail_point.html) macro.
+    /// the [`failpoint`](macro.failpoint.html) macro.
     ///
     /// `FAILPOINTS` may configure fail points that are not actually defined. In
     /// this case the configuration has no effect.
@@ -556,8 +558,8 @@ impl<'a> FailScenario<'a> {
     /// Panics if an action is not formatted correctly.
     pub fn setup() -> Self {
         // Cleanup first, in case of previous failed/panic'ed test scenarios.
-        let scenario_guard = SCENARIO.lock().unwrap_or_else(|e| e.into_inner());
-        let mut registry = scenario_guard.registry.write().unwrap();
+        let scenario_guard = SCENARIO.lock();
+        let mut registry = scenario_guard.registry.write();
         Self::cleanup(&mut registry);
 
         let failpoints = match env::var("FAILPOINTS") {
@@ -595,7 +597,7 @@ impl<'a> FailScenario<'a> {
     }
 
     /// Clean all registered fail points.
-    fn cleanup(registry: &mut std::sync::RwLockWriteGuard<'a, Registry>) {
+    fn cleanup(registry: &mut parking_lot::RwLockWriteGuard<'a, Registry>) {
         for p in registry.values() {
             // wake up all pause failpoint.
             p.set_actions("", vec![]);
@@ -606,7 +608,7 @@ impl<'a> FailScenario<'a> {
 
 impl<'a> Drop for FailScenario<'a> {
     fn drop(&mut self) {
-        let mut registry = self.scenario_guard.registry.write().unwrap();
+        let mut registry = self.scenario_guard.registry.write();
         Self::cleanup(&mut registry)
     }
 }
@@ -624,17 +626,17 @@ pub const fn has_failpoints() -> bool {
 ///
 /// Return a vector of `(name, actions)` pairs.
 pub fn list() -> Vec<(String, String)> {
-    let registry = REGISTRY.registry.read().unwrap();
+    let registry = REGISTRY.registry.read();
     registry
         .iter()
-        .map(|(name, fp)| (name.to_string(), fp.actions_str.read().unwrap().clone()))
+        .map(|(name, fp)| (name.to_string(), fp.actions_str.read().clone()))
         .collect()
 }
 
 #[doc(hidden)]
 pub fn eval<R, F: FnOnce(Option<String>) -> R>(name: &str, f: F) -> Option<R> {
     let p = {
-        let registry = REGISTRY.registry.read().unwrap();
+        let registry = REGISTRY.registry.read();
         match registry.get(name) {
             None => return None,
             Some(p) => p.clone(),
@@ -656,7 +658,7 @@ pub fn eval<R, F: FnOnce(Option<String>) -> R>(name: &str, f: F) -> Option<R> {
 ///
 /// - `off`, the fail point will do nothing.
 /// - `return(arg)`, return early when the fail point is triggered. `arg` is passed to `$e` (
-/// defined via the `fail_point!` macro) as a string.
+/// defined via the `failpoint!` macro) as a string.
 /// - `sleep(milliseconds)`, sleep for the specified time.
 /// - `panic(msg)`, panic with the message.
 /// - `print(msg)`, log the message, using the `log` crate, at the `info` level.
@@ -674,7 +676,7 @@ pub fn eval<R, F: FnOnce(Option<String>) -> R>(name: &str, f: F) -> Option<R> {
 /// A call to `cfg` with a particular fail point name overwrites any existing actions for
 /// that fail point, including those set via the `FAILPOINTS` environment variable.
 pub fn cfg<S: Into<String>>(name: S, actions: &str) -> Result<(), String> {
-    let mut registry = REGISTRY.registry.write().unwrap();
+    let mut registry = REGISTRY.registry.write();
     set(&mut registry, name.into(), actions)
 }
 
@@ -687,7 +689,7 @@ where
     S: Into<String>,
     F: Fn() + Send + Sync + 'static,
 {
-    let mut registry = REGISTRY.registry.write().unwrap();
+    let mut registry = REGISTRY.registry.write();
     let p = registry
         .entry(name.into())
         .or_insert_with(|| Arc::new(FailPoint::new()));
@@ -701,7 +703,7 @@ where
 ///
 /// If the fail point doesn't exist, nothing will happen.
 pub fn remove<S: AsRef<str>>(name: S) {
-    let mut registry = REGISTRY.registry.write().unwrap();
+    let mut registry = REGISTRY.registry.write();
     if let Some(p) = registry.remove(name.as_ref()) {
         // wake up all pause failpoint.
         p.set_actions("", vec![]);
@@ -730,7 +732,7 @@ fn set(
 
 /// Define a fail point (requires `failpoints` feature).
 ///
-/// The `fail_point!` macro has three forms, and they all take a name as the
+/// The `failpoint!` macro has three forms, and they all take a name as the
 /// first argument. The simplest form takes only a name and is suitable for
 /// executing most fail point behavior, including panicking, but not for early
 /// return or conditional execution based on a local flag.
@@ -740,9 +742,9 @@ fn set(
 /// 1. A basic fail point:
 ///
 /// ```rust
-/// # #[macro_use] extern crate fail;
+/// # #[macro_use] extern crate failpoints;
 /// fn function_return_unit() {
-///     fail_point!("fail-point-1");
+///     failpoint!("fail-point-1");
 /// }
 /// ```
 ///
@@ -752,9 +754,9 @@ fn set(
 /// 2. A fail point that may return early:
 ///
 /// ```rust
-/// # #[macro_use] extern crate fail;
+/// # #[macro_use] extern crate failpoints;
 /// fn function_return_value() -> u64 {
-///     fail_point!("fail-point-2", |r| r.map_or(2, |e| e.parse().unwrap()));
+///     failpoint!("fail-point-2", |r| r.map_or(2, |e| e.parse().unwrap()));
 ///     0
 /// }
 /// ```
@@ -771,9 +773,9 @@ fn set(
 /// 3. A fail point with conditional execution:
 ///
 /// ```rust
-/// # #[macro_use] extern crate fail;
+/// # #[macro_use] extern crate failpoints;
 /// fn function_conditional(enable: bool) {
-///     fail_point!("fail-point-3", enable, |_| {});
+///     failpoint!("fail-point-3", enable, |_| {});
 /// }
 /// ```
 ///
@@ -791,7 +793,7 @@ fn set(
 /// function.
 #[macro_export]
 #[cfg(feature = "failpoints")]
-macro_rules! fail_point {
+macro_rules! failpoint {
     ($name:expr) => {{
         $crate::eval($name, |_| {
             panic!("Return is not supported for the fail point \"{}\"", $name);
@@ -804,7 +806,7 @@ macro_rules! fail_point {
     }};
     ($name:expr, $cond:expr, $e:expr) => {{
         if $cond {
-            fail_point!($name, $e);
+            failpoint!($name, $e);
         }
     }};
 }
@@ -812,7 +814,7 @@ macro_rules! fail_point {
 /// Define a fail point (disabled, see `failpoints` feature).
 #[macro_export]
 #[cfg(not(feature = "failpoints"))]
-macro_rules! fail_point {
+macro_rules! failpoint {
     ($name:expr, $e:expr) => {{}};
     ($name:expr) => {{}};
     ($name:expr, $cond:expr, $e:expr) => {{}};
@@ -822,7 +824,7 @@ macro_rules! fail_point {
 mod tests {
     use super::*;
 
-    use std::sync::*;
+    use std::sync::mpsc;
 
     #[test]
     fn test_has_failpoints() {
@@ -833,19 +835,19 @@ mod tests {
     fn test_off() {
         let point = FailPoint::new();
         point.set_actions("", vec![Action::new(Task::Off, 1.0, None)]);
-        assert!(point.eval("test_fail_point_off").is_none());
+        assert!(point.eval("test_failpoint_off").is_none());
     }
 
     #[test]
     fn test_return() {
         let point = FailPoint::new();
         point.set_actions("", vec![Action::new(Task::Return(None), 1.0, None)]);
-        let res = point.eval("test_fail_point_return");
+        let res = point.eval("test_failpoint_return");
         assert_eq!(res, Some(None));
 
         let ret = Some("test".to_owned());
         point.set_actions("", vec![Action::new(Task::Return(ret.clone()), 1.0, None)]);
-        let res = point.eval("test_fail_point_return");
+        let res = point.eval("test_failpoint_return");
         assert_eq!(res, Some(ret));
     }
 
@@ -854,7 +856,7 @@ mod tests {
         let point = FailPoint::new();
         let timer = Instant::now();
         point.set_actions("", vec![Action::new(Task::Sleep(1000), 1.0, None)]);
-        assert!(point.eval("test_fail_point_sleep").is_none());
+        assert!(point.eval("test_failpoint_sleep").is_none());
         assert!(timer.elapsed() > Duration::from_millis(1000));
     }
 
@@ -863,7 +865,7 @@ mod tests {
     fn test_panic() {
         let point = FailPoint::new();
         point.set_actions("", vec![Action::new(Task::Panic(None), 1.0, None)]);
-        point.eval("test_fail_point_panic");
+        point.eval("test_failpoint_panic");
     }
 
     #[test]
@@ -874,7 +876,7 @@ mod tests {
                 true
             }
             fn log(&self, record: &log::Record) {
-                let mut buf = self.0.lock().unwrap();
+                let mut buf = self.0.lock();
                 buf.push(format!("{}", record.args()));
             }
             fn flush(&self) {}
@@ -887,9 +889,9 @@ mod tests {
 
         let point = FailPoint::new();
         point.set_actions("", vec![Action::new(Task::Print(None), 1.0, None)]);
-        assert!(point.eval("test_fail_point_print").is_none());
-        let msg = buffer.lock().unwrap().pop().unwrap();
-        assert_eq!(msg, "failpoint test_fail_point_print executed.");
+        assert!(point.eval("test_failpoint_print").is_none());
+        let msg = buffer.lock().pop().unwrap();
+        assert_eq!(msg, "failpoint test_failpoint_print executed.");
     }
 
     #[test]
@@ -899,7 +901,7 @@ mod tests {
         let p = point.clone();
         let (tx, rx) = mpsc::channel();
         thread::spawn(move || {
-            assert_eq!(p.eval("test_fail_point_pause"), None);
+            assert_eq!(p.eval("test_failpoint_pause"), None);
             tx.send(()).unwrap();
         });
         assert!(rx.recv_timeout(Duration::from_secs(1)).is_err());
@@ -911,7 +913,7 @@ mod tests {
     fn test_yield() {
         let point = FailPoint::new();
         point.set_actions("", vec![Action::new(Task::Yield, 1.0, None)]);
-        assert!(point.eval("test_fail_point_yield").is_none());
+        assert!(point.eval("test_failpoint_yield").is_none());
     }
 
     #[test]
@@ -919,7 +921,7 @@ mod tests {
         let point = FailPoint::new();
         let timer = Instant::now();
         point.set_actions("", vec![Action::new(Task::Delay(1000), 1.0, None)]);
-        assert!(point.eval("test_fail_point_delay").is_none());
+        assert!(point.eval("test_failpoint_delay").is_none());
         assert!(timer.elapsed() > Duration::from_millis(1000));
     }
 
@@ -930,14 +932,14 @@ mod tests {
         let mut count = 0;
         let mut times = 0f64;
         while count < 100 {
-            if point.eval("test_fail_point_frequency").is_some() {
+            if point.eval("test_failpoint_frequency").is_some() {
                 count += 1;
             }
             times += 1f64;
         }
         assert!(100.0 / 0.9 < times && times < 100.0 / 0.7, "{}", times);
         for _ in 0..times as u64 {
-            assert!(point.eval("test_fail_point_frequency").is_none());
+            assert!(point.eval("test_failpoint_frequency").is_none());
         }
     }
 
@@ -1004,11 +1006,11 @@ mod tests {
     #[cfg_attr(not(feature = "failpoints"), ignore)]
     fn test_setup_and_teardown() {
         let f1 = || {
-            fail_point!("setup_and_teardown1", |_| 1);
+            failpoint!("setup_and_teardown1", |_| 1);
             0
         };
         let f2 = || {
-            fail_point!("setup_and_teardown2", |_| 2);
+            failpoint!("setup_and_teardown2", |_| 2);
             0
         };
         env::set_var(
