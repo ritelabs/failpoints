@@ -65,40 +65,6 @@ fn test_panic() {
 
 #[test]
 #[cfg_attr(not(feature = "failpoints"), ignore)]
-fn test_print() {
-    struct LogCollector(Arc<Mutex<Vec<String>>>);
-    impl log::Log for LogCollector {
-        fn enabled(&self, _: &log::Metadata) -> bool {
-            true
-        }
-        fn log(&self, record: &log::Record) {
-            let mut buf = self.0.lock().unwrap();
-            buf.push(format!("{}", record.args()));
-        }
-        fn flush(&self) {}
-    }
-
-    let buffer = Arc::new(Mutex::new(vec![]));
-    let collector = LogCollector(buffer.clone());
-    log::set_max_level(log::LevelFilter::Info);
-    log::set_boxed_logger(Box::new(collector)).unwrap();
-
-    let f = || {
-        failpoint!("print");
-    };
-    failpoints::cfg("print", "print(msg)").unwrap();
-    f();
-    let msg = buffer.lock().unwrap().pop().unwrap();
-    assert_eq!(msg, "msg");
-
-    failpoints::cfg("print", "print").unwrap();
-    f();
-    let msg = buffer.lock().unwrap().pop().unwrap();
-    assert_eq!(msg, "failpoint print executed.");
-}
-
-#[test]
-#[cfg_attr(not(feature = "failpoints"), ignore)]
 fn test_pause() {
     let f = || {
         failpoint!("pause");

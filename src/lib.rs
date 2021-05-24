@@ -498,8 +498,8 @@ impl FailPoint {
                 None => panic!("failpoint {} panic", name),
             },
             Task::Print(msg) => match msg {
-                Some(ref msg) => log::info!("{}", msg),
-                None => log::info!("failpoint {} executed.", name),
+                Some(ref msg) => tracing::info!("{}", msg),
+                None => tracing::info!("failpoint {} executed.", name),
             },
             Task::Pause => unreachable!(),
             Task::Yield => thread::yield_now(),
@@ -661,7 +661,7 @@ pub fn eval<R, F: FnOnce(Option<String>) -> R>(name: &str, f: F) -> Option<R> {
 /// defined via the `failpoint!` macro) as a string.
 /// - `sleep(milliseconds)`, sleep for the specified time.
 /// - `panic(msg)`, panic with the message.
-/// - `print(msg)`, log the message, using the `log` crate, at the `info` level.
+/// - `print(msg)`, log the message, using the `tracing` crate, at the `info` level.
 /// - `pause`, sleep until other action is set to the fail point.
 /// - `yield`, yield the CPU.
 /// - `delay(milliseconds)`, busy waiting for the specified time.
@@ -868,30 +868,13 @@ mod tests {
         point.eval("test_failpoint_panic");
     }
 
+    #[tracing_test::traced_test]
     #[test]
     fn test_print() {
-        struct LogCollector(Arc<Mutex<Vec<String>>>);
-        impl log::Log for LogCollector {
-            fn enabled(&self, _: &log::Metadata) -> bool {
-                true
-            }
-            fn log(&self, record: &log::Record) {
-                let mut buf = self.0.lock();
-                buf.push(format!("{}", record.args()));
-            }
-            fn flush(&self) {}
-        }
-
-        let buffer = Arc::new(Mutex::new(vec![]));
-        let collector = LogCollector(buffer.clone());
-        log::set_max_level(log::LevelFilter::Info);
-        log::set_boxed_logger(Box::new(collector)).unwrap();
-
         let point = FailPoint::new();
         point.set_actions("", vec![Action::new(Task::Print(None), 1.0, None)]);
         assert!(point.eval("test_failpoint_print").is_none());
-        let msg = buffer.lock().pop().unwrap();
-        assert_eq!(msg, "failpoint test_failpoint_print executed.");
+        assert!(logs_contain("failpoint test_failpoint_print executed."));
     }
 
     #[test]
@@ -1030,4 +1013,21 @@ mod tests {
         assert_eq!(rx.recv_timeout(Duration::from_millis(500)).unwrap(), 0);
         assert_eq!(f1(), 0);
     }
+}
+
+// TODO: move it to test.rs, once tracing-test is fixed
+#[test]
+#[tracing_test::traced_test]
+#[cfg_attr(not(feature = "failpoints"), ignore)]
+fn test_failpoints_print() {
+    let f = || {
+        failpoint!("print");
+    };
+    crate::cfg("print", "print(msg)").unwrap();
+    f();
+    assert!(logs_contain("msg"));
+
+    crate::cfg("print", "print").unwrap();
+    f();
+    assert!(logs_contain("failpoint print executed."));
 }
