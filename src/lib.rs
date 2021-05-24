@@ -1013,21 +1013,21 @@ mod tests {
         assert_eq!(rx.recv_timeout(Duration::from_millis(500)).unwrap(), 0);
         assert_eq!(f1(), 0);
     }
-}
 
-// TODO: move it to test.rs, once tracing-test is fixed
-#[test]
-#[tracing_test::traced_test]
-#[cfg_attr(not(feature = "failpoints"), ignore)]
-fn test_failpoints_print() {
-    let f = || {
-        failpoint!("print");
-    };
-    crate::cfg("print", "print(msg)").unwrap();
-    f();
-    assert!(logs_contain("msg"));
+    // TODO: move it to test.rs, once tracing-test is fixed
+    #[tracing_test::traced_test]
+    #[test]
+    #[cfg_attr(not(feature = "failpoints"), ignore)]
+    fn test_failpoints_print() {
+        let f = || {
+            failpoint!("print");
+        };
+        crate::cfg("print", "print(msg)").unwrap();
+        f();
+        assert!(logs_contain("msg"));
 
-    crate::cfg("print", "print").unwrap();
-    f();
-    assert!(logs_contain("failpoint print executed."));
+        crate::cfg("print", "print").unwrap();
+        f();
+        assert!(logs_contain("failpoint print executed."));
+    }
 }
